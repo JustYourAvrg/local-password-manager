@@ -1,35 +1,11 @@
+import database
 import random
 import string
 import time
-import sqlite3
 import subprocess
 
 from werkzeug.security import generate_password_hash, check_password_hash
 from cryptography.fernet import Fernet
-
-
-conn = sqlite3.connect('database.db')
-cur = conn.cursor()
-
-
-def setting_up_db():
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS passwords (
-        id INTEGER PRIMARY KEY,
-        key CHAR(255),
-        application CHAR(255),
-        email_or_username CHAR(255),
-        password CHAR(255),  
-        user CHAR(255),  
-        FOREIGN KEY(user) REFERENCES pin(hwid)
-    )""")
-
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS pin (
-        id INTEGER PRIMARY KEY,
-        pin_number CHAR(4),
-        hwid CHAR(255) DEFAULT NULL
-    )""")
 
 
 class Manager:
@@ -42,56 +18,48 @@ class Manager:
         self.combined = self.letters + self.numbers + self.special
         self.shuffled = ''.join(random.sample(self.combined, len(self.combined)))
 
-        cur.execute("SELECT pin_number FROM pin WHERE hwid = ?", (self.hwid,))
-
-        if not cur.fetchone():
+        has_pin = database.execute_query("SELECT pin_number FROM pin WHERE hwid = ?", (self.hwid,))
+        if not has_pin:
             self.create_pin(self.hwid)
-        else:
-            self.enter_pin(self.hwid)
+        
+        self.enter_pin(self.hwid)
 
-
-    def enter_pin(self, hwid) -> bool:
-        attempt = True
-        while attempt:
-            pin = input("Enter your 4 digit pin: ")
-
-            if pin.isnumeric() and len(pin) == 4:
-                cur.execute("""
-                    SELECT pin_number FROM pin WHERE hwid = ?
-                """, (hwid,))
-                fetched_pin = cur.fetchone()
-
-                
-                if check_password_hash(fetched_pin[0], pin):
-                    self.logged_in = True
-                    self.main(hwid)
-                else:
-                    print("Wrong pin was entered")
-                    return False
-            else:
-                print("Error well entering PIN please try again")
-
-
+    
     def create_pin(self, hwid) -> None:
         attempt = True
         while attempt:
             pin = input("Set your 4 digit pin: ")
 
-            if pin.isnumeric() and len(pin) == 4:
+            if pin.isnumeric and len(pin) == 4:
                 pin = generate_password_hash(pin)
 
-                cur.execute("""
-                    INSERT INTO pin (pin_number, hwid)
-                    VALUES (?, ?)
-                """, (pin, hwid))
-
-                conn.commit()
+                database.execute_query("INSERT INTO pin (pin_number, hwid) VALUES (?, ?)", (pin, hwid))
                 attempt = False
 
                 self.enter_pin(hwid)
-
+            
             else:
-                print("Something went wrong perhaps your pin is to long or not all digits?")
+                print("Something went wrong perhaps your pin is to long or non numeric")
+
+    
+    def enter_pin(self, hwid) -> None:
+        attempt = True
+        while attempt:
+            pin = input("Enter your 4 digit pin: ")
+
+            if pin.isnumeric() and len(pin) == 4:
+                fetched_pin = database.execute_query("SELECT pin_number FROM pin WHERE hwid = ?", (hwid,))
+                for row in fetched_pin:
+                    fetched_pin = row[0]
+
+                if check_password_hash(fetched_pin, pin):
+                    self.main(hwid)
+                else:
+                    print("Wrong pin was entered")
+                    return False
+            
+            else:
+                print("Error well entering PIN please try again")
 
 
     def add_password(self, hwid) -> str:
@@ -103,31 +71,28 @@ class Manager:
             key = Fernet.generate_key()
             encrypted_password, encrypted_user = Fernet(key).encrypt(password.encode()), Fernet(key).encrypt(email_or_user.encode())
 
-            cur.execute("""
-                INSERT INTO passwords (key, application, email_or_username, password, user)
-                VALUES (?, ?, ?, ?, ?)
-            """, (key, app, encrypted_user, encrypted_password, hwid))
-            conn.commit()
+            database.execute_query("""INSERT INTO passwords (key, application, email_or_username, password, user) 
+                VALUES (?, ?, ?, ?, ?)""", (key, app, encrypted_user, encrypted_password, hwid))
 
             return "Successfully added password for {}".format(app)
         
         except Exception as e:
             return "ERROR | Something went wrong: {}".format(e)
-
+    
 
     def fetch_password(self, hwid):
         try: 
-            get_all_apps = cur.execute("SELECT application FROM passwords WHERE user = ?", (hwid,))
+            get_all_apps = database.execute_query("SELECT application FROM passwords WHERE user = ?", (hwid,))
             if not get_all_apps:
                 print("No applications are added")
                 time.sleep(0.5)
                 self.main(hwid)
 
-            print(get_all_apps.fetchall())
+            print(get_all_apps)
             print("What application do you want to get your password from?")
             chosen_app = input("App: ")
 
-            data = cur.execute("SELECT * FROM passwords WHERE application = ?", (chosen_app,))
+            data = database.execute_query("SELECT * FROM passwords WHERE application = ?", (chosen_app,))
 
             for row in data:
                 fetched_key, fetched_user, fetched_pass = row[1], row[3], row[4]
@@ -138,7 +103,7 @@ class Manager:
 
         except Exception as e:
             return "ERROR | Something went wrong: {}".format(e)
-    
+        
 
     def gen_rand_pass(self) -> str:
         try:
@@ -152,7 +117,7 @@ class Manager:
 
         except Exception as e:
             return f"ERROR | Something went wrong: {e}"
-
+        
 
     def main(self, hwid) -> None:
         print("Welcome to the password manager user {}".format(hwid))
@@ -174,8 +139,3 @@ class Manager:
                 exit()
             else:
                 print("Something went wrong please check your command input")
-
-
-if __name__ == "__main__":
-    setting_up_db()
-    Manager()
